@@ -1,0 +1,237 @@
+version: "3.5"
+
+services:
+
+  # ordering service - rest api
+  ordering-service:
+    container_name: ordering-service
+    build:
+      context: ./ordering/
+      dockerfile: rest.Dockerfile
+    restart: always
+    depends_on:
+      - ordering-mongodb
+    networks:
+      - default
+    environment:
+      PORT: '8080'
+      MONGO_SERVER: ordering-mongodb
+      MONGO_PORT: '27017'
+      MONGO_USERNAME: root
+      MONGO_PASSWORD: admin
+    ports:
+      - '8080:8080'
+    volumes:
+      - ./ordering/domain:/app/domain
+      - ./ordering/rest:/app/rest
+
+  # ordering service - message relay
+  ordering-relay:
+    container_name: ordering-relay
+    build:
+      context: ./ordering/
+      dockerfile: relay.Dockerfile
+    restart: always
+    depends_on:
+      - ordering-mongodb
+    networks:
+      - default
+    environment:
+      MONGO_SERVER: ordering-mongodb
+      MONGO_PORT: '27017'
+      MONGO_USERNAME: root
+      MONGO_PASSWORD: admin
+      KAFKA_SERVER: kafka
+      KAFKA_PORT: '9092'
+
+  # ordering service - mongodb ui
+  # reference: https://hub.docker.com/_/mongo-express
+  ordering-mongodb-admin:
+    container_name: ordering-mongodb-admin
+    image: mongo-express:0.54
+    restart: always
+    depends_on:
+      - ordering-mongodb
+    networks:
+      - default
+    environment:
+      ME_CONFIG_MONGODB_SERVER: ordering-mongodb
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: admin
+    ports:
+      - '8081:8081'
+
+  # ordering service - mongdb primary node
+  # reference: https://github.com/bitnami/bitnami-docker-mongodb/blob/master/docker-compose-replicaset.yml
+  ordering-mongodb:
+    container_name: ordering-mongodb
+    image: bitnami/mongodb:5.0
+    restart: always
+    networks:
+      - default
+    environment:
+      MONGODB_REPLICA_SET_MODE: primary
+      MONGODB_ADVERTISED_HOSTNAME: ordering-mongodb
+      MONGODB_ROOT_USERNAME: root
+      MONGODB_ROOT_PASSWORD: admin
+      MONGODB_REPLICA_SET_KEY: replicasetkey123
+    ports:
+      - '27017:27017'
+
+  # ordering service - mongdb replica node
+  # reference: https://github.com/bitnami/bitnami-docker-mongodb/blob/master/docker-compose-replicaset.yml
+  ordering-mongodb-replica0:
+    container_name: ordering-mongodb-replica0
+    image: bitnami/mongodb:5.0
+    restart: always
+    depends_on:
+      - ordering-mongodb
+    networks:
+      - default
+    environment:
+      MONGODB_REPLICA_SET_MODE: secondary
+      MONGODB_ADVERTISED_HOSTNAME: ordering-mongodb-replica0
+      MONGODB_INITIAL_PRIMARY_HOST: ordering-mongodb
+      MONGODB_INITIAL_PRIMARY_ROOT_USERNAME: root
+      MONGODB_INITIAL_PRIMARY_ROOT_PASSWORD: admin
+      MONGODB_REPLICA_SET_KEY: replicasetkey123
+
+  # ordering service - mongdb replica node
+  # reference: https://github.com/bitnami/bitnami-docker-mongodb/blob/master/docker-compose-replicaset.yml
+  ordering-mongodb-arbiter:
+    container_name: ordering-mongodb-arbiter
+    image: bitnami/mongodb:5.0
+    restart: always
+    depends_on:
+      - ordering-mongodb
+    networks:
+      - default
+    environment:
+      MONGODB_REPLICA_SET_MODE: arbiter
+      MONGODB_ADVERTISED_HOSTNAME: ordering-mongodb-arbiter
+      MONGODB_INITIAL_PRIMARY_HOST: ordering-mongodb
+      MONGODB_INITIAL_PRIMARY_ROOT_USERNAME: root
+      MONGODB_INITIAL_PRIMARY_ROOT_PASSWORD: admin
+      MONGODB_REPLICA_SET_KEY: replicasetkey123
+
+  # message broker - zookeeper
+  # reference: https://github.com/bitnami/bitnami-docker-kafka/blob/master/docker-compose.yml
+  zookeeper:
+    image: 'bitnami/zookeeper:3.7'
+    restart: always
+    container_name: zookeeper
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: 'yes'
+    networks:
+      - default
+
+  # message broker - kafka
+  # reference: https://github.com/bitnami/bitnami-docker-kafka/blob/master/docker-compose.yml
+  kafka:
+    image: 'bitnami/kafka:latest'
+    restart: always
+    container_name: kafka
+    environment:
+      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
+      ALLOW_PLAINTEXT_LISTENER: 'yes'
+    ports:
+      - '9092:9092'
+    networks:
+      - default
+    depends_on:
+      - zookeeper
+
+  # message broker - kafka ui
+  # reference: https://github.com/cloudhut/kowl/tree/master/docs/local
+  kowl:
+    image: quay.io/cloudhut/kowl:v1.4.0
+    container_name: kowl
+    restart: always
+    hostname: kowl
+    volumes:
+      - ./kowl.yml:/etc/kowl/config.yaml
+    entrypoint: ./kowl --config.filepath=/etc/kowl/config.yaml
+    ports:
+      - "9999:8080"
+    networks:
+      - default
+    depends_on:
+      - kafka
+
+  # inventory service - rest api
+  inventory-service:
+    container_name: inventory-service
+    build:
+      context: ./inventory/
+      dockerfile: rest.Dockerfile
+    restart: always
+    depends_on:
+      - inventory-mongodb
+    networks:
+      - default
+    environment:
+      PORT: '8080'
+      MONGO_SERVER: inventory-mongodb
+      MONGO_PORT: '27017'
+      MONGO_USERNAME: root
+      MONGO_PASSWORD: admin
+    ports:
+      - '8090:8080'
+    volumes:
+      - ./inventory/domain:/app/domain
+      - ./inventory/rest:/app/rest
+
+  # inventory service - message handler
+  inventory-msg-handler:
+    container_name: inventory-msg-handler
+    build:
+      context: ./inventory/
+      dockerfile: msg.Dockerfile
+    restart: always
+    depends_on:
+      - inventory-mongodb
+    networks:
+      - default
+    environment:
+      MONGO_SERVER: inventory-mongodb
+      MONGO_PORT: '27017'
+      MONGO_USERNAME: root
+      MONGO_PASSWORD: admin
+    volumes:
+      - ./inventory/domain:/app/domain
+      - ./inventory/message-handler:/app/message-handler
+
+  # inventory service - mongdb single container
+  # reference: https://github.com/bitnami/bitnami-docker-mongodb/blob/master/docker-compose.yml
+  inventory-mongodb:
+    container_name: inventory-mongodb
+    image: bitnami/mongodb:5.0
+    restart: always
+    networks:
+      - default
+    environment:
+      MONGODB_ROOT_USERNAME: root
+      MONGODB_ROOT_PASSWORD: admin
+    ports:
+      - '27027:27017'
+
+  # inventory service - mongodb ui
+  # reference: https://hub.docker.com/_/mongo-express
+  inventory-mongodb-admin:
+    container_name: inventory-mongodb-admin
+    image: mongo-express:0.54
+    restart: always
+    depends_on:
+      - inventory-mongodb
+    networks:
+      - default
+    environment:
+      ME_CONFIG_MONGODB_SERVER: inventory-mongodb
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: admin
+    ports:
+      - '8091:8081'
+
+networks:
+  default:
+    name: MyNetwork
